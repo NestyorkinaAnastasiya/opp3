@@ -7,41 +7,51 @@
 #include <conio.h>
 
 // Количество интервалов по координате
-const int	intervalsX = 5,
-	intervalsY = 5,
-	intervalsZ = 5;
+int	intervalsX, intervalsY, intervalsZ;
 
 // Шаги сетки
-double hx, hy, hz;
+double	hx = 1,
+hy = 1,
+hz = 1;
 
 // Координаты начала и конца области
 double	begX = 0, endX = 6,
-	begY = 0, endY = 6,
-	begZ = 0, endZ = 6;
+begY = 0, endY = 6,
+begZ = 0, endZ = 6;
 
 // Размер сетки
 const int dim = (intervalsX + 1) * (intervalsY + 1) * (intervalsZ + 1);
 
 struct Point {
 	double x, y, z;
-	void set(double x1, double y1, double z1)
+	int globalNumber;
+	void set(double x1, double y1, double z1, int glN)
 	{
 		x = x1;
 		y = y1;
 		z = z1;
+		globalNumber = glN;
 	};
 };
 
-class Matrix
+class SLAE
 {
+	
+	// Максимальное кол-во итераций
+	int maxiter = 10000;
+	double eps = 1e-6;
+
+public:
+	SLAE();
+	~SLAE();
 	// Кол-во нулевых диагоналей
 	int m, m2;
 	// Размерность матрицы
-	int n; 
+	int n;
 	// Кол-во эл-тов в диагоналях al2, au2 - n1 и al3, au3 - n2
-	int n1, n2; 
+	int n1, n2;
 	std::vector <double> di; // главная диагональ
-	// Диагонали, прижатые к главной
+							 // Диагонали, прижатые к главной
 	std::vector <double> al1, au1;
 	// Диагонали, расположенные на m эл-тов выше/ниже главной диагонали и прижатых к ней
 	std::vector <double> al2, au2;
@@ -53,19 +63,15 @@ class Matrix
 	std::vector <double> x;
 	// Предыдущий вектор
 	std::vector <double> x_pred;
-	// Максимальное кол-во итераций
-	int maxiter = 10000; 
-	double eps = 1e-6;
 
-public:
-	Matrix(); 
-	~Matrix();
 	// Метод Якоби
 	void Jakobi();
 	// Умножение мтрицы на вектор
 	void Mult_Ax(std::vector <double> &vo);
 	// Относительная невязка
-	double Residual(); 
+	double Residual();
 	double summ(int i, std::vector <double> &x_next, std::vector <double> x_pred);
-	
+
+	double CalcF1BC(double x, double y, double z);
+	double CalcF(double x, double y, double z);
 };

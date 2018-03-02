@@ -18,12 +18,12 @@
     <ClCompile Include="opp3.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
-    <ClCompile Include="matrix.cpp">
+    <ClCompile Include="slae.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="matrix.h">
+    <ClInclude Include="slae.h">
       <Filter>Исходные файлы</Filter>
     </ClInclude>
   </ItemGroup>

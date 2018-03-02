@@ -4,38 +4,94 @@
 #include <mpi.h>
 #include <ctime>
 #include <vector>
-#include "matrix.h"
+#include "slae.h"
 
 
 std::vector <Point> grid;
+SLAE poissonSLAE;
+int tasksPerProcess;
+std::vector <int> globalNumber;
+
 
 // Построение сетки в зависимости от координат начала и конца
 // и количества интервалов по соответствующим координатам
-
-void init()
+void BuildGrid()
 {
 	double	l;
 	int x, y, z;
+
 	grid.reserve(dim);
 
+	// Бьём задачи по координате х
 	l = abs(endX - begX);
-	hx = l / intervalsX;
-	l = abs(endY - begY);
-	hy = l / intervalsY;
-	l = abs(endZ - begZ);
-	hz = l / intervalsZ;
+	intervalsX = l / hx;
+	tasksPerProcess = intervalsX / size;
 
+	// Если количество интервалов не кратно числу процессов
+	// то распределяем оставшиеся задачи по первым процессам
+	int residue = intervalsX % size;
+	if (residue)
+		for (int i = 0; i < residue && rank == i; i++)
+			tasksPerProcess++;
+
+	l = abs(endY - begY);
+	intervalsY = l / hy;
+	l = abs(endZ - begZ);
+	intervalsZ = l / hz;
+
+	// Глобальный номер первого элемента сетки
+	int number_beg = 0;
+
+	if (size != 1)
+	{
+		// Если процесс не входит в область задач с лишними подзадачами
+		if (residue <= rank)
+		{
+			// Смещаем по области задач с лишними подзадачами
+			number_beg = residue * (tasksPerProcess + 1);
+			// -//- по остальным
+			number_beg += (rank - residue)*tasksPerProcess;
+
+			l += number_beg * hx;
+		}
+		else // Если входит, то количество задач на процесс совпадает с предыдущими
+		{
+			number_beg = rank * tasksPerProcess;
+			l += number_beg * hx;
+		}
+
+		//	Нам нужны теневые границы
+		// Для первого и последнего процесса +1 теневая грань
+		if ((rank == 0 || rank == size - 1))
+		{
+			if (rank == size - 1) 
+			{ 
+				l -= hx; 
+				number_beg--;
+			}
+			tasksPerProcess++;
+		}
+		else // для остальных +2
+		{
+			tasksPerProcess += 2;
+			l -= hx;
+			number_beg --;
+		}
+	}
+	int number;
+	// Построение сетки для процесса
 	z = begZ;
-	for (int i = 0; i < intervalsZ; i++)
+	for (int i = 0; i < intervalsZ+1; i++)
 	{
 		y = begY;
-		for (int j = 0; j < intervalsY; j++)
+		for (int j = 0; j < intervalsY+1; j++)
 		{
-			x = begX;
-			for (int k = 0; k < intervalsX; k++)
+			x = l;
+			for (int k = 0; k < tasksPerProcess+1; k++)
 			{
 				Point p;
-				p.set(x, y, z);
+				number = number_beg + k + (intervalsX + 1)*j + (intervalsX + 1)*(intervalsY + 1)*i;
+				p.set(x, y, z, number);
 				grid.push_back(p);
 				x += hx;
 			}
@@ -43,113 +99,66 @@ void init()
 		}
 		z += hz;
 	}
-
 }
 
+void CreateMatrix()
+{
+	double res;
+	for (int i = 0; i < grid.size(); i++)
+	{
+		if (grid[i].x == begX || grid[i].x == endX ||
+			grid[i].y == begY || grid[i].y == endY ||
+			grid[i].z == begZ || grid[i].z == endZ)
+			poissonSLAE.CalcF1BC(grid[i].x, grid[i].y, grid[i].z);
+		else 
+		{
+			poissonSLAE.di[grid[i].globalNumber] = -2 / pow(hx,2) - 2 / pow(hy, 2) - 2 / pow(hz, 2);
+			res = 1 / pow(hx, 2) + 1 / pow(hy, 2) + 1 / pow(hz, 2);
 
+			poissonSLAE.al1[grid[i].globalNumber - 1] = res;
+			poissonSLAE.al2[grid[i].globalNumber - poissonSLAE.m - 2] = res;
+			poissonSLAE.al3[grid[i].globalNumber - poissonSLAE.m - poissonSLAE.m2 - 3] = res;
+
+			poissonSLAE.au1[grid[i].globalNumber] = poissonSLAE.au2[grid[i].globalNumber] =
+				poissonSLAE.au3[grid[i].globalNumber] = res;
+			poissonSLAE.f[grid[i].globalNumber] = poissonSLAE.CalcF(grid[i].x, grid[i].y, grid[i].z);
+		}
+	}
+}
 
 int globalRes = 0, finalRes = 0;
-
 int rank, size;
 
-
-class Task
-{
-	// индексы начальных и конечных строк и столбцов в левой матрице
-	int m1_begi, m1_endi, m1_begj, m1_endj;
-	// -//- в правой матрице
-	int m2_begi, m2_endi, m2_begj, m2_endj;
-public:
-	void SetM1(int bi, int ei, int bj, int ej)
-	{
-		m1_begi = bi;
-		m1_endi = ei;
-		m1_begj = bj;
-		m1_endj = ej;
-	};
-	void SetM2(int bi, int ei, int bj, int ej)
-	{
-		m2_begi = bi;
-		m2_endi = ei;
-		m2_begj = bj;
-		m2_endj = ej;
-	};
-	void Run();
-};
-
-void Task::Run()
-{
-	
-}
-
-// Очередь задач
-/*std::queue <Task*> allTasks;
-bool GetTask(Task **currTask)
-{
-	// Блокируем доступ других потоков для избежания ошибок
-	// вследствие некорректной работы с очередью
-	//pthread_mutex_lock(&mutex);
-
-	// Если очередь задач пуста
-	if (allTasks.empty())
-	{
-		// Снимаем замок
-		//pthread_mutex_unlock(&mutex);
-		return false;
-	}
-	else
-	{
-		// Достаём задачу из очереди
-		*currTask = allTasks.front();
-		allTasks.pop();
-	}
-
-	//pthread_mutex_unlock(&mutex);
-	return true;
-}
-*/
 /*
 // Функция вычислительного потока
 void* worker(void* me)
 {	//Текущая задача
-	Task *currTask;
-	int id = *((int*)me);
-	unsigned int beginTime = clock();
-	// Пока есть свои задачи - выполняем свои
-	while (GetTask(&currTask))
-	{
-		currTask->Run();
-		delete[] currTask;
-		countOfTasks[id] = countOfTasks[id] + 1;
-	}
-	unsigned int endTime = clock();
-	timeOfWork[id] = (endTime - beginTime) * 1000 / CLOCKS_PER_SEC;
-	return 0;
+Task *currTask;
+int id = *((int*)me);
+unsigned int beginTime = clock();
+// Пока есть свои задачи - выполняем свои
+while (GetTask(&currTask))
+{
+currTask->Run();
+delete[] currTask;
+countOfTasks[id] = countOfTasks[id] + 1;
+}
+unsigned int endTime = clock();
+timeOfWork[id] = (endTime - beginTime) * 1000 / CLOCKS_PER_SEC;
+return 0;
 }*/
 
 int main(int argc, char **argv)
 {
-	// Формирование очереди
-	for (int m1_i = 0; m1_i < n / m1_blocki; m1_i++)
-		for (int m1_j = 0; m1_j < m / m1_blockj; m1_j++)
-			for (int m2_j = 0; m2_j < r / m2_blockj; m2_j++)
-			{
-				Task *t = new Task();
-				t->SetM1(m1_i*m1_blocki, m1_i*m1_blocki + m1_blocki - 1,
-					m1_j*m1_blockj, m1_j*m1_blockj + m1_blockj - 1);
-				t->SetM2(m1_j*m1_blockj, m1_j*m1_blockj + m1_blockj - 1,
-					m2_j*m2_blockj, m2_j*m2_blockj + m2_blockj - 1); // строки должны совпадать со столбцами в матрице m1
-				allTasks.push(t);
-			}
-	
+
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	MPI_Status st;
 
 	unsigned int beginTime = clock();
 
-	init();
-	
+	BuildGrid();
+
 	unsigned int endTime = clock();
 
 	/*FILE *fo;
@@ -157,17 +166,17 @@ int main(int argc, char **argv)
 	fprintf(fo, "------------------------------------------------------------\n\n n: %d\tdimBlock: %d\tcountOfThreads: %d\n\n", n, m1_blocki, countOfWorkers);
 	unsigned int sumOfTime = 0;
 	for (int i = 0; i < countOfWorkers; i++)
-		sumOfTime += timeOfWork[i];
+	sumOfTime += timeOfWork[i];
 	fprintf(fo, "Time: %d\n\n", (endTime - beginTime) * 1000 / CLOCKS_PER_SEC);
 	for (int i = 0; i < countOfWorkers; i++)
-		fprintf(fo, "process: %d\ttime: %d\tcountOfTasks: %d\n", ids[i], timeOfWork[i], countOfTasks[i]);
+	fprintf(fo, "process: %d\ttime: %d\tcountOfTasks: %d\n", ids[i], timeOfWork[i], countOfTasks[i]);
 	fprintf(fo, "\n------------------------------------------------------------\n");
 	fclose(fo);*/
 
 	//MPI_Reduce(&globalRes, &resultOfGlobalTask, 1, MPI_INT, MPI_SUM, 0, currentComm);
 
-/*	if (rank == 0)
-		std::cerr << "Global result = " << resultOfGlobalTask << "\n";*/
+	/*	if (rank == 0)
+	std::cerr << "Global result = " << resultOfGlobalTask << "\n";*/
 	MPI_Finalize();
 	return 0;
 }
