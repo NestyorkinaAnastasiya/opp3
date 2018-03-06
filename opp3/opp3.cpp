@@ -2,25 +2,76 @@
 #include <stdlib.h>
 #include <omp.h>
 #include <mpi.h>
+#include <math.h>
 #include <ctime>
 #include <vector>
-#include "slae.h"
 
+int size = 1, rank = 0;
+// Шаги сетки
+double	hx = 0.5,
+hy = 0.5,
+hz = 0.5;
 
-std::vector <Point> grid;
-SLAE poissonSLAE;
-int tasksPerProcess;
-std::vector <int> globalNumber;
+// Координаты начала и конца области
+double	begX = 0, endX = 2,
+begY = 0, endY = 2,
+begZ = 0, endZ = 2;
+
+struct Point 
+{
+	double x, y, z;
+	int globalNumber;
+
+	void set(double x1, double y1, double z1, int glN)
+	{
+		x = x1;
+		y = y1;
+		z = z1;
+		globalNumber = glN;
+	};
+};
+
+struct Grid 
+{
+	// Максимальное кол-во итераций
+	int maxiter = 1000;
+	double eps = 1e-14;
+
+	// Количество интервалов по координате
+	int	intervalsX, intervalsY, intervalsZ;
+	// Количество интервалов по х на процесс
+	int tasksPerProcess;
+
+	// Координаты начала и конца области для процесса
+	double	firstX, lastX;
+
+	// Размер сетки
+	int dim;
+
+	Grid();
+	std::vector<Point> points;
+	std::vector<double> oldU, newU, f;
+	double *oldData, *newData;
+	std::vector<int> numbersOfLeftShadowBorders;
+	std::vector<int> numbersOfRightShadowBorders;
+	
+	void Calculate1Node(int i);
+	void CalculateU();
+	bool BelongToShadowBorders(int node);
+	double CalcF(double x, double y, double z);
+	double CalcF1BC(double x, double y, double z);
+
+} grid;
 
 
 // Построение сетки в зависимости от координат начала и конца
 // и количества интервалов по соответствующим координатам
-void BuildGrid()
+Grid::Grid()
 {
 	double	l;
-	int x, y, z;
+	double x, y, z;
 
-	grid.reserve(dim);
+	grid.points.reserve(dim);
 
 	// Бьём задачи по координате х
 	l = abs(endX - begX);
@@ -38,10 +89,10 @@ void BuildGrid()
 	intervalsY = l / hy;
 	l = abs(endZ - begZ);
 	intervalsZ = l / hz;
-
+	dim = (intervalsX + 1) * (intervalsY + 1) * (intervalsZ + 1);
 	// Глобальный номер первого элемента сетки
 	int number_beg = 0;
-
+	firstX = begX;
 	if (size != 1)
 	{
 		// Если процесс не входит в область задач с лишними подзадачами
@@ -52,12 +103,12 @@ void BuildGrid()
 			// -//- по остальным
 			number_beg += (rank - residue)*tasksPerProcess;
 
-			l += number_beg * hx;
+			firstX = number_beg * hx;
 		}
 		else // Если входит, то количество задач на процесс совпадает с предыдущими
 		{
 			number_beg = rank * tasksPerProcess;
-			l += number_beg * hx;
+			firstX = number_beg * hx;
 		}
 
 		//	Нам нужны теневые границы
@@ -66,7 +117,7 @@ void BuildGrid()
 		{
 			if (rank == size - 1) 
 			{ 
-				l -= hx; 
+				firstX -= hx;
 				number_beg--;
 			}
 			tasksPerProcess++;
@@ -74,60 +125,176 @@ void BuildGrid()
 		else // для остальных +2
 		{
 			tasksPerProcess += 2;
-			l -= hx;
+			firstX -= hx;
 			number_beg --;
 		}
 	}
 	int number;
 	// Построение сетки для процесса
 	z = begZ;
+	// Начало и конец области с теневыми
+	lastX = firstX + hx * tasksPerProcess;
 	for (int i = 0; i < intervalsZ+1; i++)
 	{
 		y = begY;
 		for (int j = 0; j < intervalsY+1; j++)
 		{
-			x = l;
+			x = firstX;
 			for (int k = 0; k < tasksPerProcess+1; k++)
 			{
 				Point p;
 				number = number_beg + k + (intervalsX + 1)*j + (intervalsX + 1)*(intervalsY + 1)*i;
 				p.set(x, y, z, number);
-				grid.push_back(p);
+				points.push_back(p);
+				oldU.push_back(1);
+
+				// Расчёт правых частей
+				if ((abs(x - begX) < eps) || (abs(x - endX) < eps) ||
+					(abs(y - begY) < eps) || (abs(y - endY) < eps) ||
+					(abs(z - begZ) < eps) || (abs(z - endZ) < eps))
+					f.push_back(CalcF1BC(x, y, z));
+				else
+				{
+					f.push_back(CalcF(x, y, z));
+
+					// Формирование теневых границ
+					if (k == 0)
+						numbersOfLeftShadowBorders.push_back(oldU.size() - 1);
+					if (k == tasksPerProcess)
+						numbersOfRightShadowBorders.push_back(oldU.size() - 1);
+				}
+
 				x += hx;
 			}
 			y += hy;
 		}
 		z += hz;
 	}
+	newU.resize(grid.oldU.size());
 }
 
-void CreateMatrix()
+// i - номер узла, для которого происходит расчёт
+void Grid::Calculate1Node(int i)
 {
-	double res;
-	for (int i = 0; i < grid.size(); i++)
-	{
-		if (grid[i].x == begX || grid[i].x == endX ||
-			grid[i].y == begY || grid[i].y == endY ||
-			grid[i].z == begZ || grid[i].z == endZ)
-			poissonSLAE.CalcF1BC(grid[i].x, grid[i].y, grid[i].z);
-		else 
+	double result;
+	// Смещения, для расчёта соседей по y и по z
+	int offsetY = tasksPerProcess + 1, offsetZ = (tasksPerProcess + 1)*(intervalsY + 1);
+
+	// Если узел принадлежит к границе, то накладываются первые краевые условия
+	if ((abs(grid.points[i].x - begX) < eps) || (abs(grid.points[i].x - endX) < eps) ||
+		(abs(grid.points[i].y - begY) < eps) || (abs(grid.points[i].y - endY) < eps) ||
+		(abs(grid.points[i].z - begZ) < eps) || (abs(grid.points[i].z - endZ) < eps))
+		newData[i] = grid.f[i];
+	else // иначе если узел не принадлежит тененевой границе, 
+		 // то производим расчёт значения в данном узле
+		if (!BelongToShadowBorders(i))
 		{
-			poissonSLAE.di[grid[i].globalNumber] = -2 / pow(hx,2) - 2 / pow(hy, 2) - 2 / pow(hz, 2);
-			res = 1 / pow(hx, 2) + 1 / pow(hy, 2) + 1 / pow(hz, 2);
-
-			poissonSLAE.al1[grid[i].globalNumber - 1] = res;
-			poissonSLAE.al2[grid[i].globalNumber - poissonSLAE.m - 2] = res;
-			poissonSLAE.al3[grid[i].globalNumber - poissonSLAE.m - poissonSLAE.m2 - 3] = res;
-
-			poissonSLAE.au1[grid[i].globalNumber] = poissonSLAE.au2[grid[i].globalNumber] =
-				poissonSLAE.au3[grid[i].globalNumber] = res;
-			poissonSLAE.f[grid[i].globalNumber] = poissonSLAE.CalcF(grid[i].x, grid[i].y, grid[i].z);
+			result = (oldData[i - 1] + oldData[i + 1]) / pow(hx, 2) +
+				(oldData[i - offsetY] + oldData[i + offsetY]) / pow(hy, 2) +
+				(oldData[i - offsetZ] + oldData[i + offsetZ]) / pow(hz, 2) - f[i];
+			result *= pow(hx, 2)*pow(hy, 2)*pow(hz, 2) / 2 / (pow(hy, 2)*pow(hz, 2) +
+				pow(hz, 2)*pow(hx, 2) + pow(hx, 2)*pow(hy, 2));
+			newData[i] = result;
 		}
-	}
 }
 
-int globalRes = 0, finalRes = 0;
-int rank, size;
+void Grid::CalculateU()
+{
+	double residual = 1;
+	std::vector<double> leftBorder(numbersOfLeftShadowBorders.size());
+	std::vector<double> rightBorder(numbersOfLeftShadowBorders.size());
+	MPI_Request sendReqLeft, recvReqLeft, sendReqRight, recvReqRight;
+	int iteration;
+	for (iteration = 0; iteration < maxiter && residual > eps; iteration++)
+	{	// Если итерация чётная, то в  oldU старые значения, а в newU - новые
+		// иначе наоборот
+
+		if (iteration % 2 == 0)
+		{
+			oldData = grid.oldU.data();
+			newData = grid.newU.data();
+		}
+		else
+		{
+			oldData = grid.newU.data();
+			newData = grid.oldU.data();
+		}
+		
+		if (rank != 0)
+		{	
+			// Получение левой теневой границы (без неё не возможен счёт)
+			MPI_Recv(leftBorder.data(), leftBorder.size(), MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
+			for (int i = 0; i < numbersOfLeftShadowBorders.size(); i++)
+			{
+				// Записали полученную левую теневую границу
+				oldData[numbersOfLeftShadowBorders[i]] = leftBorder[i];
+				Calculate1Node(numbersOfLeftShadowBorders[i] + 1);
+				// Сформировали левую границу области самого процесса
+				leftBorder[i] = newData[numbersOfLeftShadowBorders[i] + 1];
+			}
+			// Передача левой границы области процесса как теневой для левого соседнего процесса
+			MPI_Isend(leftBorder.data(), leftBorder.size(), MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &sendReqLeft);
+		}
+
+		if (rank != size - 1)
+		{
+			MPI_Recv(rightBorder.data(), rightBorder.size(), MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
+			for (int i = 0; i < numbersOfRightShadowBorders.size(); i++)
+			{
+				Calculate1Node(numbersOfRightShadowBorders[i] - 1);
+				rightBorder[i] = newData[numbersOfRightShadowBorders[i] - 1];
+			}
+			MPI_Isend(rightBorder.data(), rightBorder.size(), MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD, &sendReqRight);
+		}
+
+		// Проходимся по сетке (OpenMP)
+		for (int i = 0; i < grid.oldU.size() && abs(grid.points[i].x - firstX) < eps 
+			&& abs(grid.points[i].x - lastX) < eps; i++)
+			Calculate1Node(i);
+
+		// Расчёт абсолютной погрешности между текущим и предыдущим решениями
+		residual = 0;
+		for (int i = 0; i < oldU.size(); i++)
+			residual += pow(newData[i] - oldData[i], 2);
+		residual = sqrt(residual);
+		if(rank != 0 && rank != size - 1)
+		{
+			MPI_Wait(&sendReqLeft, MPI_STATUS_IGNORE);
+			MPI_Wait(&sendReqRight, MPI_STATUS_IGNORE);
+		}
+		else if (rank == 0)
+			MPI_Wait(&sendReqRight, MPI_STATUS_IGNORE);
+		else
+			MPI_Wait(&sendReqLeft, MPI_STATUS_IGNORE);
+		// ОБМЕНЯТЬСЯ СООБЩЕНИЯМИ про невязку (флаг)18+
+		
+	}
+	// Если новые значения оказались в старом векторе, копируем результат новый вектор
+	if ((iteration - 1) % 2 != 0)
+		newU = oldU;
+}
+
+// Функция принадлежности узла node теневой границе
+bool Grid::BelongToShadowBorders(int node)
+{
+	for (auto i : numbersOfLeftShadowBorders)
+		if (i == node) return true;
+	for (auto i : numbersOfRightShadowBorders)
+		if (i == node) return true;
+	return false;
+}
+
+// Учёт первых краевых условий
+double Grid::CalcF1BC(double x, double y, double z)
+{
+	return 2;
+}
+
+// Правая часть уравнения Пуассона
+double Grid::CalcF(double x, double y, double z)
+{
+	return 0;
+}
 
 /*
 // Функция вычислительного потока
@@ -150,15 +317,13 @@ return 0;
 
 int main(int argc, char **argv)
 {
+//	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+//	MPI_Comm_size(MPI_COMM_WORLD, &size);
+//	MPI_Status st;
 
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	MPI_Comm_size(MPI_COMM_WORLD, &size);
-	MPI_Status st;
 
 	unsigned int beginTime = clock();
-
-	BuildGrid();
-
+	grid.CalculateU();
 	unsigned int endTime = clock();
 
 	/*FILE *fo;
@@ -177,6 +342,6 @@ int main(int argc, char **argv)
 
 	/*	if (rank == 0)
 	std::cerr << "Global result = " << resultOfGlobalTask << "\n";*/
-	MPI_Finalize();
+//	MPI_Finalize();
 	return 0;
 }

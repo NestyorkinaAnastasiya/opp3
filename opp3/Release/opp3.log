@@ -1,0 +1,10 @@
+﻿  opp3.cpp
+opp3.cpp(245): warning C4244: =: преобразование "double" в "int", возможна потеря данных
+opp3.cpp(256): warning C4244: =: преобразование "double" в "int", возможна потеря данных
+opp3.cpp(258): warning C4244: =: преобразование "double" в "int", возможна потеря данных
+  Создание кода
+  3 of 215 functions ( 1.4%) were compiled, the rest were copied from previous compilation.
+    0 functions were new in current compilation
+    0 functions had inline decision re-evaluated but remain unchanged
+  Создание кода завершено
+  opp3.vcxproj -> C:\Users\Анастасия\source\repos\opp3\Release\opp3.exe

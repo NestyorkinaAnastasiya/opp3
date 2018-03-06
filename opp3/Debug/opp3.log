@@ -1,0 +1,7 @@
+﻿  opp3.cpp
+c:\users\анастасия\source\repos\opp3\opp3\opp3.cpp(72): warning C4244: =: преобразование "double" в "int", возможна потеря данных
+c:\users\анастасия\source\repos\opp3\opp3\opp3.cpp(83): warning C4244: =: преобразование "double" в "int", возможна потеря данных
+c:\users\анастасия\source\repos\opp3\opp3\opp3.cpp(85): warning C4244: =: преобразование "double" в "int", возможна потеря данных
+c:\users\анастасия\source\repos\opp3\opp3\opp3.cpp(187): warning C4018: <: несоответствие типов со знаком и без знака
+c:\users\анастасия\source\repos\opp3\opp3\opp3.cpp(208): warning C4018: <: несоответствие типов со знаком и без знака
+  opp3.vcxproj -> C:\Users\Анастасия\source\repos\opp3\Debug\opp3.exe

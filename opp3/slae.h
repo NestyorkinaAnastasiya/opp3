@@ -3,7 +3,6 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <math.h>
 #include <conio.h>
 
 // Количество интервалов по координате
@@ -20,7 +19,7 @@ begY = 0, endY = 6,
 begZ = 0, endZ = 6;
 
 // Размер сетки
-const int dim = (intervalsX + 1) * (intervalsY + 1) * (intervalsZ + 1);
+int dim;
 
 struct Point {
 	double x, y, z;
