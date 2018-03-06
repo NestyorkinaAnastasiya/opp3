@@ -6,7 +6,7 @@
 #include <ctime>
 #include <vector>
 
-int size = 1, rank = 0;
+int size, rank;
 // Шаги сетки
 double	hx = 0.5,
 hy = 0.5,
@@ -317,9 +317,9 @@ return 0;
 
 int main(int argc, char **argv)
 {
-//	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-//	MPI_Comm_size(MPI_COMM_WORLD, &size);
-//	MPI_Status st;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	MPI_Status st;
 
 
 	unsigned int beginTime = clock();
@@ -342,6 +342,6 @@ int main(int argc, char **argv)
 
 	/*	if (rank == 0)
 	std::cerr << "Global result = " << resultOfGlobalTask << "\n";*/
-//	MPI_Finalize();
+	MPI_Finalize();
 	return 0;
 }
